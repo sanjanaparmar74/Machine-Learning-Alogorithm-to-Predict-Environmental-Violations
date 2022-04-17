@@ -1,0 +1,32 @@
+as_of_date_frequency: 1y
+as_of_times: !!python/object/new:triage.util.structs.AsOfTimeList
+  listitems:
+  - &id001 2009-01-01 00:00:00
+cohort_name: all_entities
+end_time: &id002 2010-01-01 00:00:00
+feature_groups:
+- 'all: True'
+feature_names: !!python/object/new:triage.util.structs.FeatureNameList
+  listitems:
+  - inspections_entity_id_100y_total_count
+  - inspections_entity_id_1y_total_count
+  - inspections_entity_id_2y_total_count
+  - inspections_entity_id_3y_total_count
+  - inspections_entity_id_4y_total_count
+  - inspections_entity_id_5y_total_count
+feature_start_time: 2000-01-01 00:00:00
+first_as_of_time: *id001
+indices:
+- entity_id
+- as_of_date
+label_name: any_violation
+label_timespan: 1y
+label_type: binary
+last_as_of_time: *id001
+matrix_id: any_violation_binary_2009-01-01 00:00:00_2010-01-01 00:00:00
+matrix_info_end_time: *id002
+matrix_type: test
+state: active
+test_as_of_date_frequency: 1y
+test_duration: 0d
+test_label_timespan: 1y
