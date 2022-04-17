@@ -1,0 +1,154 @@
+config_version: 'v7'
+
+model_comment: 'triage demo'
+
+random_seed: 1995
+
+temporal_config:
+
+    # first date our feature data is good
+    feature_start_time: '2000-01-01'
+    feature_end_time: '2013-06-01'
+
+    # first date our label data is good
+    # donorschoose: as far back as we have good donation data
+    label_start_time: '2011-09-02'
+    label_end_time: '2013-06-01'
+
+    model_update_frequency: '4month'
+
+    # length of time defining a test set
+    test_durations: ['3month']
+    # defines how far back a training set reaches
+    max_training_histories: ['1y']
+
+    # we sample every day, since new projects are posted
+    # every day
+    training_as_of_date_frequencies: ['1day']
+    test_as_of_date_frequencies: ['1day']
+    
+    # when posted project timeout
+    label_timespans: ['4month']
+    
+
+cohort_config:
+  query: |
+    SELECT distinct(entity_id), date_posted as as_of_date
+      FROM data.projects
+    WHERE date_posted = '{as_of_date}'::date - interval '1day'
+
+label_config:
+  query: |
+    SELECT entity_id,
+    CASE WHEN d.entity_id IS NULL THEN 1 ELSE 0 END AS outcome  
+    FROM data.projects
+    LEFT JOIN (SELECT DISTINCT entity_id FROM data.donations) d using(entity_id)
+    WHERE date_posted BETWEEN '{as_of_date}'::date - interval '1day'
+    AND '{as_of_date}'::date + interval '{label_timespan}'
+
+  name: 'any_donations'
+
+
+feature_aggregations:
+  -
+    prefix: 'project_features'
+    from_obj: 'data.projects'
+    knowledge_date_column: 'date_posted'
+
+    aggregates_imputation:
+      all:
+        type: 'zero'
+
+    categoricals_imputation:
+      all:
+        type: 'null_category'          
+
+    categoricals:
+      -
+        column: 'resource_type'
+        metrics:
+          - 'max' 
+        choice_query: 'select distinct resource_type from data.projects'
+    
+    aggregates:
+      -
+        quantity: 'total_asking_price'
+        metrics:
+          - 'sum'
+      
+    # Since our time-aggregate features are precomputed, feature interval is 
+    # irrelvant. We keep 'all' as a default.
+    intervals: ['all'] 
+    groups: ['entity_id']
+
+grid_config:
+    'sklearn.ensemble.RandomForestClassifier':
+      n_estimators: [150]
+      max_depth: [50]
+      min_samples_split: [25]
+    
+    'sklearn.tree.DecisionTreeClassifier':
+      max_depth: [3]
+      max_features: [null]
+      min_samples_split: [25]
+      
+    'triage.component.catwalk.estimators.classifiers.ScaledLogisticRegression':
+        C: [0.1]
+        penalty: ['l1']
+    
+    'triage.component.catwalk.baselines.rankers.PercentileRankOneFeature':
+      feature: ['project_features_entity_id_all_total_asking_price_sum']
+      descend: [False]
+
+
+scoring:
+    testing_metric_groups:
+        -
+          metrics: [precision@, recall@]
+          thresholds:
+              percentiles: [1, 2, 3, 4, 5, 6, 7, 8, 9, 
+                  10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                  20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 
+                  30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 
+                  40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+                  50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+                  60, 61, 62, 63, 64, 65, 66, 67, 68, 69,
+                  70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
+                  80, 81, 82, 83, 84, 85, 86, 87, 88, 89,
+                  90, 91, 92, 93, 94, 95, 96, 97, 98, 99,
+                  100]
+              top_n: [25, 50, 100]
+
+    training_metric_groups:
+        -
+          metrics: [precision@, recall@]
+          thresholds:
+              percentiles: [1, 2, 3, 4, 5, 6, 7, 8, 9, 
+                  10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                  20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 
+                  30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 
+                  40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+                  50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+                  60, 61, 62, 63, 64, 65, 66, 67, 68, 69,
+                  70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
+                  80, 81, 82, 83, 84, 85, 86, 87, 88, 89,
+                  90, 91, 92, 93, 94, 95, 96, 97, 98, 99,
+                  100]
+              top_n: [25, 50, 100]
+          
+bias_audit_config:
+    from_obj_table: 'data.projects'
+    attribute_columns:
+      - 'teacher_prefix'
+    knowledge_date_column: 'date_posted'
+    entity_id_column: 'entity_id'
+    ref_groups_method: 'predefined'
+    ref_groups:
+        'teacher_prefix': 'Mr.'
+    thresholds:
+        percentiles: [5, 10, 15, 20, 25, 50, 100]
+        top_n: [25, 50, 100]
+
+individual_importance:
+    methods: [] # empty list means don't calculate individual importances
+    n_ranks: 1 
