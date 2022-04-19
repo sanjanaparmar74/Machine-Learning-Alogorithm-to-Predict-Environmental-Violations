@@ -1,0 +1,328 @@
+config_version: 'v7'
+
+model_comment: 'new baselines prior to report'
+
+random_seed: 1995
+
+# Establish the timelines for our model prior to running.
+temporal_config:
+
+    # Earliest date our feature data is acceptable
+    feature_start_time: '2000-01-01'
+    # Last possible date
+    feature_end_time: '2015-01-01'
+
+    # Earliest date our label data is acceptable
+    label_start_time: '2000-01-01'
+    # Last possible date
+    label_end_time: '2016-01-01'
+
+    # Our team decided to run the model yearly as the NYSDEC needs to inspect yearly
+    model_update_frequency: '1y'
+
+    # length of time defining a test set should be immediate
+    test_durations: ['0d']
+    # defines how far back a training set reaches
+    # 2 years as a reasonable amount and 100 for thoroughness
+    max_training_histories: ['2y','100y']
+
+    # we sample every day, since new projects are posted
+    training_as_of_date_frequencies: ['1y']
+    test_as_of_date_frequencies: ['1y']
+
+    # when posted project timeout
+    test_label_timespans: ['1y']
+    training_label_timespans: ['1y']
+
+# To ensure that all active facilities are captured our team elected to look five years into the past.
+# Some facilities come and go every other year. A five year spread will guarantee none are missed.
+cohort_config:
+  query: |
+    select distinct (entity_id)
+    from public.epa1_cohort
+    where as_of_date::date <= '{as_of_date}'::date
+    and as_of_date::date >= '{as_of_date}'::date - interval '5 year'
+
+  name: 'facilities'
+
+
+#label name: any_violation
+#desc: encode any violation in past {training period} by handler/handler features
+#goal: estimate the likelihood of future noncompliance from any past noncompliance
+label_config:
+  query: |
+    select distinct(c.entity_id), MAX(case WHEN found_violation_flag = 'Y' THEN 1 when found_violation_flag is null then null ELSE 0 END) as outcome
+    from public.epa1_cohort c
+    left join (
+    	select *
+    	from cmecomp3_int_fix cif
+    	WHERE state = 'NY'
+    	AND evaluation_agency = 'S'
+    	AND evaluation_start_date BETWEEN '{as_of_date}'::date
+    	AND '{as_of_date}'::date + interval '{label_timespan}') a
+    on c.entity_id = a.entity_id
+    where c.as_of_date::date <= '{as_of_date}'::date
+    and c.as_of_date::date >= '{as_of_date}'::date - interval '5 year'
+    group by c.entity_id
+
+  name: 'any_violation_label'
+
+# Below we outline the full list of models and parameters used. More detail found in the Appendix of the report.
+grid_config:
+
+    'sklearn.neighbors.KNeighborsClassifier':
+      n_neighbors: [1, 5, 25, 99]
+      n_jobs: [20]
+
+    'triage.component.catwalk.estimators.classifiers.ScaledLogisticRegression':
+      penalty: ['none', 'l1', 'l2']
+      C: [1, 0.1, 0.01, 0.001, 0.0001]
+
+    'sklearn.ensemble.RandomForestClassifier':
+      n_estimators: [200, 400, 600]
+      max_depth: [1, 5, 10, 25, 40, 55, null]
+      max_features: [null, 'sqrt']
+      min_samples_split: [2, 10, 25]
+      n_jobs: [20]
+
+    'sklearn.tree.DecisionTreeClassifier':
+      max_depth: [1, 2, 3, 5, 10, 25, 40, 55, 70, 85, null]
+      min_samples_split: [2, 10, 25, 50, 100]
+
+      # We opted to include many baselines to compare against. 
+     'triage.component.catwalk.baselines.rankers.PercentileRankOneFeature':
+       feature: ['zip_average_entity_id_2y_total_max', 'waste_handling_type_entity_id_100y_handling_type_code_B_sum', 'waste_handling_type_entity_id_5y_handling_type_code_B_sum',
+       'waste_handling_type_entity_id_3y_handling_type_code_B_sum', 'manifest_waste_code_entity_id_2y_waste_code_total_count', 'facility_age_entity_id_100y_total_count']
+       descend: [False, True]
+
+    'sklearn.dummy.DummyClassifier':
+      strategy: ['prior', 'most_frequent']
+
+# Features explained briefly below with a more thorough review in the Appendix of the report.
+feature_aggregations:
+# First feature to take a count of inspections performed over different yearly periods
+  -
+     prefix: 'inspections'
+     from_obj: 'public.inspections_w_zip'
+     knowledge_date_column: 'evaluation_start_date'
+
+     aggregates_imputation:
+       all:
+         type: 'zero_noflag'
+
+     aggregates:
+       -
+         quantity:
+            total: 'distinct(evaluation_start_date)'
+         metrics:
+           - 'count'
+
+     intervals: ['1y','2y','3y','4y','5y','100y']
+     groups: ['entity_id']
+# Count of waste types generated per facility
+  -
+     prefix: 'count_waste_type'
+     from_obj: 'public.gen_quant_normalized'
+     knowledge_date_column: 'report_year'
+
+     aggregates_imputation:
+       all:
+         type: 'zero_noflag'
+
+     aggregates:
+       -
+         quantity: '*'
+         metrics:
+           - 'count'
+
+     intervals: ['1y','2y','3y','4y','5y','100y']
+     groups: ['entity_id']
+# Total waste genereated generated per facility
+  -
+     prefix: 'sum_waste_quant'
+     from_obj: 'public.gen_quant_normalized'
+     knowledge_date_column: 'report_year'
+
+     aggregates_imputation:
+       all:
+         type: 'zero_noflag'
+
+     aggregates:
+       -
+         quantity: 'gen_qty'
+         metrics:
+           - 'sum'
+
+     intervals: ['1y','2y','3y','4y','5y','100y']
+     groups: ['entity_id']
+# Handling type codes for waste generated by facilities
+  -
+     prefix: 'waste_handling_type'
+     from_obj: 'public.mani_handling_type_codes_2001_through_2015'
+     knowledge_date_column: 'year'
+
+     categoricals_imputation:
+       all:
+         type: 'null_category'
+
+     categoricals:
+       -
+         column: 'handling_type_code'
+         metrics:
+           - 'sum'
+         choice_query: 'select distinct handling_type_code from public.mani_handling_type_codes_2001_through_2015'
+
+     intervals: ['1y','2y','3y','4y','5y','100y']
+     groups: ['entity_id']
+#calculating age of facility
+  -
+     prefix: 'facility_age'
+     from_obj: 'public.epa1_cohort'
+     knowledge_date_column: 'as_of_date::date'
+
+     aggregates_imputation:
+       all:
+         type: 'zero_noflag'
+
+     aggregates:
+       -
+         quantity:
+            total: '*'
+         metrics:
+           - 'count'
+
+     intervals: ['100y']
+     groups: ['entity_id']
+# Total violation count per facility
+  -
+     prefix: 'violation_count'
+     from_obj: 'public.cmecomp3_int_fix'
+     knowledge_date_column: 'evaluation_start_date'
+
+     aggregates_imputation:
+       all:
+         type: 'zero_noflag'
+
+     aggregates:
+       -
+         quantity:
+            total: 'final_count'
+         metrics:
+           - 'sum'
+
+     intervals: ['1y','2y','3y','4y','5y','100y']
+     groups: ['entity_id']
+# Total federal violation penalty amount by facility
+  -
+     prefix: 'violation_penalty_amount'
+     from_obj: 'public.cmecomp3_int_fix'
+     knowledge_date_column: 'evaluation_start_date'
+
+     aggregates_imputation:
+       all:
+         type: 'zero_noflag'
+
+     aggregates:
+       -
+         quantity:
+            total: 'final_amount'
+         metrics:
+           - 'sum'
+
+     intervals: ['1y','2y','3y','4y','5y','100y']
+     groups: ['entity_id']
+
+# Average total inspections by zip code across all time
+  -
+     prefix: 'zip_average'
+     from_obj: 'public.inspections_w_zip_avgs'
+     knowledge_date_column: 'evaluation_start_date'
+
+     aggregates_imputation:
+       all:
+         type: 'zero'
+
+     aggregates:
+       -
+         quantity:
+            total: 'average_inspections'
+         metrics:
+           - 'max'
+
+     intervals: ['1y','2y']
+     groups: ['entity_id']
+
+# Waste codes for waste generated by facilities (Manifest data)
+  -
+     prefix: 'manifest_waste_code'
+     from_obj: 'public.mani_waste_codes_2001_through_2015'
+     knowledge_date_column: 'year'
+
+     categoricals_imputation:
+       all:
+         type: 'null_category'
+
+     categoricals:
+       -
+         column: 'waste_code'
+         metrics:
+           - 'sum'
+         choice_query: 'select distinct waste_code from public.mani_waste_codes_2001_through_2015'
+
+     intervals: ['1y', '2y']
+     groups: ['entity_id']
+
+# Both the testing and training sets must be tested using recall and precision for model accuracy purposes
+scoring:
+     testing_metric_groups:
+         -
+           metrics: [precision@, recall@]
+           thresholds:
+               percentiles: [1, 2, 3, 4, 5, 6, 7, 8, 9,
+                   10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                   20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+                   30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+                   40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+                   50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+                   60, 61, 62, 63, 64, 65, 66, 67, 68, 69,
+                   70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
+                   80, 81, 82, 83, 84, 85, 86, 87, 88, 89,
+                   90, 91, 92, 93, 94, 95, 96, 97, 98, 99,
+                   100]
+               top_n: [400, 500, 750]
+
+     training_metric_groups:
+         -
+           metrics: [precision@, recall@]
+           thresholds:
+               percentiles: [1, 2, 3, 4, 5, 6, 7, 8, 9,
+                   10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                   20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+                   30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+                   40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+                   50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+                   60, 61, 62, 63, 64, 65, 66, 67, 68, 69,
+                   70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
+                   80, 81, 82, 83, 84, 85, 86, 87, 88, 89,
+                   90, 91, 92, 93, 94, 95, 96, 97, 98, 99,
+                   100]
+               top_n: [400, 500, 750]
+
+# Our team elected to use high income zip codes and large minority population zip codes to check for bias in our data and models.
+# More information on this can be found in our report.
+bias_audit_config:
+    from_obj_table: 'public.cohort_acs_info'
+    attribute_columns: ['high_income', 'large_minority_pop']
+    knowledge_date_column: 'as_of_date'
+    entity_id_column: 'entity_id'
+    ref_groups_method: 'predefined'
+    ref_groups:
+        'high_income': 'Y'
+        'large_minority_pop': 'N'
+    thresholds:
+        top_n: [500]
+
+
+individual_importance:
+    methods: [] # empty list means don't calculate individual importances
+    n_ranks: 1
