@@ -1,5 +1,9 @@
 # Machine-Learning-Alogorithm-to-Predict-Environmental-Violations
 
+Programming Language: Python
+
+Models Used: Scaled Logistic Regression, Decision Trees, Random Forests, and K-Nearest Neighbors
+
 # NYSDEC/EPA Inspections
 
 ## The Organization
